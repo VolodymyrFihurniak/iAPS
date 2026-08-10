@@ -93,6 +93,17 @@ jobs:
             "${API}/repos/${REPO}/actions/workflows/syncUpstreamRepo.yml/dispatches" \
             -d '{"ref":"main"}'
 
+      - name: Start validation build
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body -sS -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${API}/repos/${REPO}/actions/workflows/build_iAPS.yml/dispatches" \
+            -d '{"ref":"main"}'
+
       - name: Summary
         shell: bash
         run: |
@@ -102,5 +113,6 @@ jobs:
             echo '- `ENABLE_NUKE_CERTS=true`'
             echo '- `5. Sync Upstream` enabled'
             echo '- Initial upstream sync dispatched for `main`'
+            echo '- Validation build dispatched for `main`'
             echo '- Any new upstream commit pushed into `main` will trigger the official `4. Build iAPS` workflow.'
           } >> "$GITHUB_STEP_SUMMARY"
