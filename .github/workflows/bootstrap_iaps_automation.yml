@@ -1,0 +1,106 @@
+name: Configure iAPS automation
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/bootstrap_iaps_automation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  configure:
+    name: Configure autobuild and upstream sync
+    if: github.repository == 'VolodymyrFihurniak/iAPS'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      REPO: ${{ github.repository }}
+      API: https://api.github.com
+
+    steps:
+      - name: Verify GH_PAT is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::GH_PAT is not configured. Add the GH_PAT repository secret first."
+            exit 1
+          fi
+
+      - name: Configure repository variables
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          upsert_variable() {
+            local name="$1"
+            local value="$2"
+            local status
+
+            status=$(curl -sS -o /tmp/variable.json -w '%{http_code}' \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "${API}/repos/${REPO}/actions/variables/${name}")
+
+            if [ "$status" = "200" ]; then
+              curl --fail-with-body -sS -X PATCH \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "${API}/repos/${REPO}/actions/variables/${name}" \
+                -d "$(jq -nc --arg name "$name" --arg value "$value" '{name:$name,value:$value}')"
+            elif [ "$status" = "404" ]; then
+              curl --fail-with-body -sS -X POST \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer ${GH_TOKEN}" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "${API}/repos/${REPO}/actions/variables" \
+                -d "$(jq -nc --arg name "$name" --arg value "$value" '{name:$name,value:$value}')"
+            else
+              cat /tmp/variable.json || true
+              echo "::error::Unable to read repository variable ${name} (HTTP ${status}). Check GH_PAT permissions."
+              exit 1
+            fi
+          }
+
+          upsert_variable AUTO_BUILD_BRANCHES main
+          upsert_variable ENABLE_NUKE_CERTS true
+
+      - name: Enable official upstream sync workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body -sS -X PUT \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${API}/repos/${REPO}/actions/workflows/syncUpstreamRepo.yml/enable"
+
+      - name: Start initial upstream sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body -sS -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "${API}/repos/${REPO}/actions/workflows/syncUpstreamRepo.yml/dispatches" \
+            -d '{"ref":"main"}'
+
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo '### iAPS automation configured'
+            echo '- `AUTO_BUILD_BRANCHES=main`'
+            echo '- `ENABLE_NUKE_CERTS=true`'
+            echo '- `5. Sync Upstream` enabled'
+            echo '- Initial upstream sync dispatched for `main`'
+            echo '- Any new upstream commit pushed into `main` will trigger the official `4. Build iAPS` workflow.'
+          } >> "$GITHUB_STEP_SUMMARY"
